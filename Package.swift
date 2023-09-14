@@ -13,10 +13,10 @@ let package = Package(
         .package(url: "https://source.skip.tools/skip-foundation.git", from: "0.1.21"),
     ],
     targets: [
-    .target(name: "SkipYAML", dependencies: [.product(name: "SkipFoundation", package: "skip-foundation"))], plugins: [.plugin(name: "skipstone", package: "skip")]),
+    .target(name: "SkipYAML", dependencies: [.product(name: "SkipFoundation", package: "skip-foundation")], plugins: [.plugin(name: "skipstone", package: "skip")]),
     .testTarget(name: "SkipYAMLTests", dependencies: [
         "SkipYAML",
-        .product(name: "SkipTest", package: "skip"))
+        .product(name: "SkipTest", package: "skip")
     ], plugins: [.plugin(name: "skipstone", package: "skip")]),
     ]
 )
