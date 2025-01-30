@@ -6,11 +6,11 @@ let package = Package(
     defaultLocalization: "en",
     platforms: [.iOS(.v16), .macOS(.v13), .tvOS(.v16), .watchOS(.v9), .macCatalyst(.v16)],
     products: [
-    .library(name: "SkipYAML", targets: ["SkipYAML"]),
+        .library(name: "SkipYAML", targets: ["SkipYAML"]),
     ],
     dependencies: [
-        .package(url: "https://source.skip.tools/skip.git", from: "0.8.46"),
-        .package(url: "https://source.skip.tools/skip-foundation.git", from: "0.6.11"),
+        .package(url: "https://source.skip.tools/skip.git", from: "1.0.0"),
+        .package(url: "https://source.skip.tools/skip-foundation.git", from: "1.0.0"),
     ],
     targets: [
     .target(name: "SkipYAML", dependencies: [.product(name: "SkipFoundation", package: "skip-foundation")], plugins: [.plugin(name: "skipstone", package: "skip")]),
