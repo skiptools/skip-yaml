@@ -1,11 +1,7 @@
-// Copyright 2023 Skip
-//
-// This is free software: you can redistribute and/or modify it
-// under the terms of the GNU Lesser General Public License 3.0
-// as published by the Free Software Foundation https://fsf.org
-#if os(macOS)
-import SkipTest
+// Copyright 2023-2026 Skip
+// SPDX-License-Identifier: MPL-2.0
 
+#if SKIP
 /// This test case will run the transpiled tests for the Skip module.
 @available(macOS 13, macCatalyst 16, *)
 final class XCSkipTests: XCTestCase, XCGradleHarness {

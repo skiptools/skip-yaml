@@ -1,18 +1,14 @@
-// Copyright 2024 Skip
-//
-// This is free software: you can redistribute and/or modify it
-// under the terms of the GNU Lesser General Public License 3.0
-// as published by the Free Software Foundation https://fsf.org
+// Copyright 2024-2026 Skip
+// SPDX-License-Identifier: MPL-2.0
 
-import XCTest
+import Testing
 import OSLog
 import Foundation
 
 let logger: Logger = Logger(subsystem: "SkipYAML", category: "Tests")
 
-@available(macOS 13, macCatalyst 16, iOS 16, tvOS 16, watchOS 8, *)
-final class SkipYAMLTests: XCTestCase {
-    func testSkipYAML() throws {
-        XCTAssertEqual(1 + 2, 3, "basic test")
+@Suite struct SkipYAMLTests {
+    @Test func skipYAMLTest() throws {
+        #expect(1 + 2 == 3)
     }
 }
