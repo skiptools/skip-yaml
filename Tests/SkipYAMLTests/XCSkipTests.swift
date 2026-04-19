@@ -1,7 +1,8 @@
 // Copyright 2023-2026 Skip
 // SPDX-License-Identifier: MPL-2.0
+#if os(macOS) || os(Linux)
+import SkipTest
 
-#if SKIP
 /// This test case will run the transpiled tests for the Skip module.
 @available(macOS 13, macCatalyst 16, *)
 final class XCSkipTests: XCTestCase, XCGradleHarness {

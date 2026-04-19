@@ -17,6 +17,8 @@ let package = Package(
     .testTarget(name: "SkipYAMLTests", dependencies: [
         "SkipYAML",
         .product(name: "SkipTest", package: "skip")
-    ], plugins: [.plugin(name: "skipstone", package: "skip")]),
+    ],
+    resources: [.process("Resources")],
+    plugins: [.plugin(name: "skipstone", package: "skip")]),
     ]
 )
