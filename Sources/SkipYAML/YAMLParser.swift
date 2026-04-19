@@ -1,11 +1,7 @@
 // Copyright 2024-2026 Skip
 // SPDX-License-Identifier: MPL-2.0
 
-#if !SKIP
 import Foundation
-#else
-import SkipFoundation
-#endif
 
 /// Internal YAML parser implementing recursive descent parsing.
 /// Supports YAML 1.2 Core Schema with common 1.1 compatibility.
