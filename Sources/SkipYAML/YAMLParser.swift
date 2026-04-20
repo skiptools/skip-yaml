@@ -433,9 +433,11 @@ internal final class YAMLParser {
 
             // Parse key
             let key: YAMLValue
+            var isExplicitKey = false
             if let c = peek() {
                 if c == "?" && (peekAt(1) == nil || peekAt(1) == " " || peekAt(1) == "\n") {
                     // Explicit key
+                    isExplicitKey = true
                     advance() // consume '?'
                     skipInlineWhitespace()
                     if let next = peek(), next == "\n" {
@@ -470,6 +472,20 @@ internal final class YAMLParser {
 
             // Expect ':'
             skipInlineWhitespace()
+            // For explicit keys (? syntax), ':' may be on the next line at the same indent
+            if isExplicitKey, let nextChar = peek(), nextChar == "\n" {
+                let savedPos = pos
+                let savedLine = line
+                let savedCol = self.col
+                advance() // consume newline
+                skipWhitespaceAndComments()
+                if !(col == mapIndent && peek() == ":") {
+                    pos = savedPos
+                    line = savedLine
+                    self.col = savedCol
+                    break
+                }
+            }
             guard let colon = peek(), colon == ":" else {
                 break
             }
@@ -698,7 +714,7 @@ internal final class YAMLParser {
         skipWhitespaceAndComments()
         guard let c = peek() else { return .null }
 
-        if c == "&" { return try parseAnchor(indent: 0, minIndent: -1) }
+        if c == "&" { return try parseAnchor(indent: 0, minIndent: -1, inFlow: true) }
         if c == "*" { return try parseAlias() }
         if c == "!" { return try parseTag(indent: 0, minIndent: -1) }
         if c == "[" { return try parseFlowSequence() }
@@ -1295,7 +1311,9 @@ internal final class YAMLParser {
             if ln.isEmpty {
                 result += "\n"
                 prevWasEmpty = true
-                prevWasMore = false
+                // Don't reset prevWasMore: the preserved break after a more-indented
+                // section must be maintained through empty lines so that transitioning
+                // back to a normal line produces the correct number of newlines.
                 continue
             }
 
@@ -1335,7 +1353,7 @@ internal final class YAMLParser {
 
     // MARK: - Anchors and Aliases
 
-    private func parseAnchor(indent: Int, minIndent: Int) throws -> YAMLValue {
+    private func parseAnchor(indent: Int, minIndent: Int, inFlow: Bool = false) throws -> YAMLValue {
         advance() // consume '&'
         var name = ""
         while let c = peek(), c != " " && c != "\n" && c != "\t" && c != "," && c != "]" && c != "}" && c != ":" {
@@ -1353,11 +1371,13 @@ internal final class YAMLParser {
                 advance()
             }
             skipWhitespaceAndComments()
-            if atEnd() || col <= indent {
+            if atEnd() || col <= minIndent {
                 value = .null
             } else {
                 value = try parseBlockNode(minIndent: minIndent)
             }
+        } else if inFlow {
+            value = try parseFlowValue()
         } else {
             value = try parseNodeAtCurrentPosition(indent: col, minIndent: minIndent)
         }
@@ -1538,6 +1558,9 @@ internal final class YAMLParser {
         // Decimal - must be all digits (possibly with underscores)
         let cleaned = str.replacingOccurrences(of: "_", with: "")
         if cleaned.isEmpty { return nil }
+
+        // YAML 1.2: decimal integers must not have leading zeros (except "0" itself)
+        if cleaned.count > 1 && cleaned.hasPrefix("0") { return nil }
 
         // Verify all characters are digits
         for ch in cleaned {
