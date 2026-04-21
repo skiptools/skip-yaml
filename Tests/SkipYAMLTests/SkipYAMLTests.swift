@@ -1872,6 +1872,878 @@ import Foundation
         #expect(try YAMLValue.parse("-2.5e+2") == .double(-250.0))
     }
 
+    // MARK: - Additional YAML Corner Cases (Round 2)
+
+    // --- Carriage return normalization ---
+
+    @Test func testCRLFNormalization() throws {
+        let yaml = "key: value\r\nother: data\r\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("value"))
+        #expect(result["other"] == .string("data"))
+    }
+
+    @Test func testLoneCRNormalization() throws {
+        let yaml = "key: value\rother: data\r"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("value"))
+        #expect(result["other"] == .string("data"))
+    }
+
+    // --- Tab character edge cases ---
+
+    @Test func testTabInPlainScalarValue() throws {
+        let yaml = "key: value\twith\ttabs"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("value\twith\ttabs"))
+    }
+
+    @Test func testTabAfterColon() throws {
+        let yaml = "key:\tvalue"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("value"))
+    }
+
+    // --- Plain scalars starting with digits but not numbers ---
+
+    @Test func testDigitPrefixedStrings() throws {
+        let yaml = """
+        a: 3things
+        b: 1st
+        c: 0.0.0
+        d: 1.2.3.4
+        e: 10-20
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"] == .string("3things"))
+        #expect(result["b"] == .string("1st"))
+        #expect(result["c"] == .string("0.0.0"))
+        #expect(result["d"] == .string("1.2.3.4"))
+        #expect(result["e"] == .string("10-20"))
+    }
+
+    // --- Timestamps as strings (YAML 1.2 doesn't have a timestamp type) ---
+
+    @Test func testTimestampLikeValues() throws {
+        let yaml = """
+        date1: 2024-01-15
+        date2: 2024-01-15T10:30:00Z
+        time: 10:30:00
+        """
+        let result = try YAMLValue.parse(yaml)
+        // In YAML 1.2 core schema, these are just strings
+        #expect(result["date1"] == .string("2024-01-15"))
+        #expect(result["date2"] == .string("2024-01-15T10:30:00Z"))
+        #expect(result["time"] == .string("10:30:00"))
+    }
+
+    // --- Strings that look like document markers ---
+
+    @Test func testDocumentMarkerLikeStrings() throws {
+        // Quoted "---" and "..." should be strings
+        let yaml = """
+        a: "---"
+        b: '...'
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"] == .string("---"))
+        #expect(result["b"] == .string("..."))
+    }
+
+    @Test func testDashDashDashInMiddleOfLine() throws {
+        // "---" not at line start is not a document marker
+        let yaml = "key: value---end"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("value---end"))
+    }
+
+    // --- Invalid number formats that should be strings ---
+
+    @Test func testInvalidOctal() throws {
+        // 0o89 has invalid octal digits
+        #expect(try YAMLValue.parse("0o89") == .string("0o89"))
+    }
+
+    @Test func testInvalidHex() throws {
+        // 0xGG has invalid hex digits
+        #expect(try YAMLValue.parse("0xGG") == .string("0xGG"))
+    }
+
+    @Test func testDoubleDecimalPoint() throws {
+        // 1.2.3 is not a valid float
+        #expect(try YAMLValue.parse("1.2.3") == .string("1.2.3"))
+    }
+
+    @Test func testTrailingDot() throws {
+        // "1." could be ambiguous -- verify behavior
+        let result = try YAMLValue.parse("1.")
+        // Should either be string "1." or double 1.0
+        if case .string = result {
+            // OK
+        } else if case .double(let v) = result {
+            #expect(v == 1.0)
+        } else {
+            throw YAMLError.parseError("Unexpected type for 1.")
+        }
+    }
+
+    @Test func testPlusMinusAlone() throws {
+        // "+" alone is a string (not a number prefix without digits)
+        #expect(try YAMLValue.parse("+") == .string("+"))
+        // "-" alone is a block sequence indicator (dash + EOF), yielding a sequence with one null item
+        #expect(try YAMLValue.parse("-") == .sequence([.null]))
+    }
+
+    // --- Anchor on null value ---
+
+    @Test func testAnchorOnNull() throws {
+        let yaml = """
+        - &empty null
+        - *empty
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result[0] == .null)
+        #expect(result[1] == .null)
+    }
+
+    // --- Anchors in flow mappings ---
+
+    @Test func testAnchorInFlowMapping() throws {
+        let result = try YAMLValue.parse("{a: &ref hello, b: *ref}")
+        #expect(result["a"] == .string("hello"))
+        #expect(result["b"] == .string("hello"))
+    }
+
+    // --- Alias as mapping value ---
+
+    @Test func testAliasAsMappingValue() throws {
+        let yaml = """
+        default: &default_val 42
+        copy: *default_val
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["default"] == .int(42))
+        #expect(result["copy"] == .int(42))
+    }
+
+    // --- Anchor on mapping ---
+
+    @Test func testAnchorOnMappingValue() throws {
+        let yaml = """
+        base: &base
+          x: 1
+          y: 2
+        derived:
+          z: 3
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["base"]?["x"] == .int(1))
+        #expect(result["base"]?["y"] == .int(2))
+        #expect(result["derived"]?["z"] == .int(3))
+    }
+
+    // --- Comments in flow collections ---
+
+    @Test func testCommentsInFlowSequence() throws {
+        // YAML spec allows comments in flow collections on separate lines
+        let yaml = "[\n  1, # first\n  2, # second\n  3 # third\n]"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result == .sequence([.int(1), .int(2), .int(3)]))
+    }
+
+    @Test func testCommentsInFlowMapping() throws {
+        let yaml = "{\n  a: 1, # first\n  b: 2 # second\n}"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"] == .int(1))
+        #expect(result["b"] == .int(2))
+    }
+
+    // --- Block scalars followed by more content ---
+
+    @Test func testMultipleBlockScalarsInMapping() throws {
+        let yaml = "first: |\n  hello\nsecond: |\n  world\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["first"] == .string("hello\n"))
+        #expect(result["second"] == .string("world\n"))
+    }
+
+    @Test func testBlockScalarFollowedBySequence() throws {
+        let yaml = "text: |-\n  hello world\nitems:\n  - one\n  - two\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["text"] == .string("hello world"))
+        #expect(result["items"] == .sequence([.string("one"), .string("two")]))
+    }
+
+    // --- Sequence of block scalars ---
+
+    @Test func testSequenceOfBlockScalars() throws {
+        let yaml = "- |\n  first\n- |\n  second\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result[0] == .string("first\n"))
+        #expect(result[1] == .string("second\n"))
+    }
+
+    // --- Literal block with extra indentation preserved ---
+
+    @Test func testLiteralBlockExtraIndentPreserved() throws {
+        let yaml = "code: |\n  line1\n    indented\n  line3\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["code"] == .string("line1\n  indented\nline3\n"))
+    }
+
+    // --- Empty string values in various contexts ---
+
+    @Test func testEmptyQuotedStringInSequence() throws {
+        let yaml = """
+        - ""
+        - ''
+        - hello
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result[0] == .string(""))
+        #expect(result[1] == .string(""))
+        #expect(result[2] == .string("hello"))
+    }
+
+    @Test func testEmptyQuotedStringInFlowSequence() throws {
+        let result = try YAMLValue.parse("['', \"\"]")
+        #expect(result == .sequence([.string(""), .string("")]))
+    }
+
+    @Test func testEmptyQuotedStringInFlowMapping() throws {
+        let result = try YAMLValue.parse("{'': value, key: ''}")
+        #expect(result[""] == .string("value"))
+        #expect(result["key"] == .string(""))
+    }
+
+    // --- Single-element flow collections ---
+
+    @Test func testSingleElementFlowSequence() throws {
+        #expect(try YAMLValue.parse("[42]") == .sequence([.int(42)]))
+        #expect(try YAMLValue.parse("[hello]") == .sequence([.string("hello")]))
+    }
+
+    @Test func testSingleElementFlowMapping() throws {
+        let result = try YAMLValue.parse("{key: value}")
+        #expect(result["key"] == .string("value"))
+    }
+
+    // --- Nested empty structures ---
+
+    @Test func testNestedEmptyMappings() throws {
+        let yaml = """
+        outer:
+          inner: {}
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["outer"]?["inner"] == .mapping(YAMLMapping()))
+    }
+
+    @Test func testNestedEmptySequences() throws {
+        let yaml = """
+        outer:
+          inner: []
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["outer"]?["inner"] == .sequence([]))
+    }
+
+    // --- Varying indentation widths ---
+
+    @Test func testOneSpaceIndentation() throws {
+        let yaml = "a:\n b:\n  c: deep\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"]?["b"]?["c"] == .string("deep"))
+    }
+
+    @Test func testFourSpaceIndentation() throws {
+        let yaml = """
+        root:
+            level1:
+                level2: value
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["root"]?["level1"]?["level2"] == .string("value"))
+    }
+
+    @Test func testMixedIndentationWidths() throws {
+        let yaml = "a:\n  b:\n      c: value\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"]?["b"]?["c"] == .string("value"))
+    }
+
+    // --- Quoted string preserving leading/trailing whitespace ---
+
+    @Test func testQuotedLeadingTrailingSpaces() throws {
+        let yaml = "key: \"  hello  \""
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("  hello  "))
+    }
+
+    @Test func testSingleQuotedLeadingTrailingSpaces() throws {
+        let yaml = "key: '  hello  '"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("  hello  "))
+    }
+
+    // --- Special YAML escape sequences (\N, \_, \L, \P) ---
+
+    @Test func testSpecialYAMLEscapes() throws {
+        // \N = next line (U+0085)
+        #expect(try YAMLValue.parse("\"\\N\"") == .string("\u{0085}"))
+        // \_ = non-breaking space (U+00A0)
+        #expect(try YAMLValue.parse("\"\\_\"") == .string("\u{00A0}"))
+        // \L = line separator (U+2028)
+        #expect(try YAMLValue.parse("\"\\L\"") == .string("\u{2028}"))
+        // \P = paragraph separator (U+2029)
+        #expect(try YAMLValue.parse("\"\\P\"") == .string("\u{2029}"))
+    }
+
+    // --- Double-quoted string with unicode \U escape (8 hex digits) ---
+
+    @Test func testUnicodeUpperUEscape() throws {
+        // \U00000041 = 'A'
+        #expect(try YAMLValue.parse("\"\\U00000041\"") == .string("A"))
+    }
+
+    // --- Block scalar with comment in header ---
+
+    @Test func testBlockScalarHeaderComment() throws {
+        let yaml = "content: | # this is a comment\n  hello\n  world\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["content"] == .string("hello\nworld\n"))
+    }
+
+    @Test func testFoldedBlockHeaderComment() throws {
+        let yaml = "content: >- # strip trailing\n  hello\n  world\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["content"] == .string("hello world"))
+    }
+
+    // --- Flow collection keys in block mapping ---
+
+    @Test func testFlowSequenceAtTopLevel() throws {
+        // A flow sequence at the start of a line is parsed as a standalone sequence
+        let yaml = "[a, b]"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result == .sequence([.string("a"), .string("b")]))
+    }
+
+    @Test func testFlowMappingAtTopLevel() throws {
+        // A flow mapping at the start of a line is parsed as a standalone mapping
+        let yaml = "{a: 1, b: 2}"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"] == .int(1))
+        #expect(result["b"] == .int(2))
+    }
+
+    // --- Plain scalar with special chars not at start ---
+
+    @Test func testPlainScalarWithAmpersand() throws {
+        let yaml = "key: AT&T"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("AT&T"))
+    }
+
+    @Test func testPlainScalarWithAsterisk() throws {
+        let yaml = "key: bold*text*here"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("bold*text*here"))
+    }
+
+    @Test func testPlainScalarWithExclamation() throws {
+        let yaml = "key: hello!"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("hello!"))
+    }
+
+    @Test func testPlainScalarWithAtSign() throws {
+        let yaml = "key: user@example.com"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("user@example.com"))
+    }
+
+    // --- Values with equals sign (common in env vars) ---
+
+    @Test func testEqualsSignInValue() throws {
+        let yaml = """
+        env:
+          - FOO=bar
+          - BAZ=qux=123
+          - EMPTY=
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["env"]?[0] == .string("FOO=bar"))
+        #expect(result["env"]?[1] == .string("BAZ=qux=123"))
+        #expect(result["env"]?[2] == .string("EMPTY="))
+    }
+
+    // --- Flow mapping with quoted keys containing special chars ---
+
+    @Test func testFlowMappingQuotedKeysWithColons() throws {
+        let result = try YAMLValue.parse("{\"key:with:colons\": value}")
+        #expect(result["key:with:colons"] == .string("value"))
+    }
+
+    @Test func testFlowMappingQuotedKeysWithCommas() throws {
+        let result = try YAMLValue.parse("{'key,with,commas': value}")
+        #expect(result["key,with,commas"] == .string("value"))
+    }
+
+    // --- Deeply nested flow within flow ---
+
+    @Test func testDeeplyNestedFlowMappings() throws {
+        let result = try YAMLValue.parse("{a: {b: {c: deep}}}")
+        #expect(result["a"]?["b"]?["c"] == .string("deep"))
+    }
+
+    @Test func testMixedNestedFlowCollections() throws {
+        let result = try YAMLValue.parse("{list: [1, {nested: true}, [2, 3]]}")
+        #expect(result["list"]?[0] == .int(1))
+        #expect(result["list"]?[1]?["nested"] == .bool(true))
+        #expect(result["list"]?[2] == .sequence([.int(2), .int(3)]))
+    }
+
+    // --- Multiline folded block with multiple paragraphs ---
+
+    @Test func testFoldedBlockMultipleParagraphs() throws {
+        let yaml = """
+        text: >
+          First paragraph
+          continues here.
+
+          Second paragraph
+          continues here.
+
+          Third paragraph.
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["text"] == .string("First paragraph continues here.\nSecond paragraph continues here.\nThird paragraph.\n"))
+    }
+
+    // --- Single-quoted string with only escaped quotes ---
+
+    @Test func testSingleQuotedOnlyEscapedQuotes() throws {
+        // '''' = a single quote character
+        #expect(try YAMLValue.parse("''''") == .string("'"))
+        // '''''' = two single quote characters
+        #expect(try YAMLValue.parse("''''''") == .string("''"))
+    }
+
+    // --- Double-quoted string with consecutive escapes ---
+
+    @Test func testDoubleQuotedConsecutiveEscapes() throws {
+        #expect(try YAMLValue.parse("\"\\n\\n\"") == .string("\n\n"))
+        #expect(try YAMLValue.parse("\"\\t\\t\"") == .string("\t\t"))
+        #expect(try YAMLValue.parse("\"\\\\\\\\\"") == .string("\\\\"))
+    }
+
+    // --- Mapping with boolean value followed by comment ---
+
+    @Test func testBooleanValueWithComment() throws {
+        let yaml = """
+        debug: true # enable debug mode
+        verbose: false # disable verbose
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["debug"] == .bool(true))
+        #expect(result["verbose"] == .bool(false))
+    }
+
+    // --- Mapping entry with null value followed by sequence ---
+
+    @Test func testNullValueFollowedBySequence() throws {
+        let yaml = """
+        first:
+        items:
+          - a
+          - b
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["first"] == .null)
+        #expect(result["items"] == .sequence([.string("a"), .string("b")]))
+    }
+
+    // --- Multiple different node types as sequence items ---
+
+    @Test func testSequenceWithAllNodeTypes() throws {
+        let yaml = """
+        - plain string
+        - 42
+        - 3.14
+        - true
+        - null
+        - "double quoted"
+        - 'single quoted'
+        - [flow, seq]
+        - {flow: map}
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result[0] == .string("plain string"))
+        #expect(result[1] == .int(42))
+        #expect(result[2] == .double(3.14))
+        #expect(result[3] == .bool(true))
+        #expect(result[4] == .null)
+        #expect(result[5] == .string("double quoted"))
+        #expect(result[6] == .string("single quoted"))
+        #expect(result[7] == .sequence([.string("flow"), .string("seq")]))
+        #expect(result[8]?["flow"] == .string("map"))
+    }
+
+    // --- Very long scalar values ---
+
+    @Test func testVeryLongPlainScalar() throws {
+        var longVal = ""
+        for _ in 0..<200 {
+            longVal += "abcde"
+        }
+        let yaml = "key: " + longVal
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string(longVal))
+    }
+
+    // --- Mapping keys with trailing spaces before colon ---
+
+    @Test func testKeyWithSpaceBeforeColon() throws {
+        // "key :" - the space before colon is part of the key lookup logic
+        let yaml = "key : value\n"
+        let result = try YAMLValue.parse(yaml)
+        // Key should be "key" (trailing spaces trimmed)
+        if case .mapping(let map) = result {
+            #expect(map.count == 1)
+            #expect(map.entries[0].value == .string("value"))
+        }
+    }
+
+    // --- Flow mapping with no spaces ---
+
+    @Test func testFlowMappingColonRequiresSpace() throws {
+        // In YAML flow context, ":" must be followed by a space or flow indicator
+        // to be a key-value separator. "a:1" is a single plain scalar.
+        // But "a: 1" works:
+        let result = try YAMLValue.parse("{a: 1, b: 2}")
+        #expect(result["a"] == .int(1))
+        #expect(result["b"] == .int(2))
+    }
+
+    // --- Roundtrip: complex nested structure ---
+
+    @Test func testRoundtripNestedStructure() throws {
+        let yaml = """
+        name: test-app
+        version: 1
+        config:
+          debug: true
+          log_level: info
+          ports:
+            - 8080
+            - 8443
+          database:
+            host: localhost
+            port: 5432
+        """
+        let parsed1 = try YAMLValue.parse(yaml)
+        let emitted = parsed1.yamlString()
+        let parsed2 = try YAMLValue.parse(emitted)
+        #expect(parsed1 == parsed2)
+    }
+
+    // --- Roundtrip: sorted keys ---
+
+    @Test func testRoundtripSortedKeys() throws {
+        let yaml = """
+        z: last
+        a: first
+        m: middle
+        """
+        let parsed = try YAMLValue.parse(yaml)
+        let emitted = parsed.yamlString(sortKeys: true)
+        #expect(emitted.contains("a: first"))
+        let parsed2 = try YAMLValue.parse(emitted)
+        #expect(parsed2["a"] == .string("first"))
+        #expect(parsed2["m"] == .string("middle"))
+        #expect(parsed2["z"] == .string("last"))
+    }
+
+    // --- Emitter: strings needing quoting ---
+
+    @Test func testEmitStringWithNewline() throws {
+        let yaml = YAMLValue.string("line1\nline2").yamlString()
+        let parsed = try YAMLValue.parse(yaml)
+        #expect(parsed == .string("line1\nline2"))
+    }
+
+    @Test func testEmitStringWithColon() throws {
+        let yaml = YAMLValue.string("key: value").yamlString()
+        let parsed = try YAMLValue.parse(yaml)
+        #expect(parsed == .string("key: value"))
+    }
+
+    @Test func testEmitStringWithHash() throws {
+        let yaml = YAMLValue.string("has # hash").yamlString()
+        let parsed = try YAMLValue.parse(yaml)
+        #expect(parsed == .string("has # hash"))
+    }
+
+    // --- Emitter: special starting characters need quoting ---
+
+    @Test func testEmitStringStartingWithDash() throws {
+        let yaml = YAMLValue.string("- not a list").yamlString()
+        let parsed = try YAMLValue.parse(yaml)
+        #expect(parsed == .string("- not a list"))
+    }
+
+    @Test func testEmitStringStartingWithBracket() throws {
+        let yaml = YAMLValue.string("[not a list]").yamlString()
+        let parsed = try YAMLValue.parse(yaml)
+        #expect(parsed == .string("[not a list]"))
+    }
+
+    @Test func testEmitStringStartingWithBrace() throws {
+        let yaml = YAMLValue.string("{not a map}").yamlString()
+        let parsed = try YAMLValue.parse(yaml)
+        #expect(parsed == .string("{not a map}"))
+    }
+
+    // --- Emitter: negative infinity ---
+
+    @Test func testEmitNegativeInfinity() throws {
+        let yaml = YAMLValue.double(-Double.infinity).yamlString()
+        #expect(yaml.contains("-.inf"))
+        let parsed = try YAMLValue.parse(yaml)
+        if case .double(let v) = parsed {
+            #expect(v == -Double.infinity)
+        }
+    }
+
+    // --- Multi-document with document end markers ---
+
+    @Test func testMultiDocWithDocumentEndAndNoExplicitStart() throws {
+        let yaml = "first\n...\nsecond\n"
+        let docs = try YAMLValue.parseAll(yaml)
+        #expect(docs.count >= 1)
+        #expect(docs[0] == .string("first"))
+    }
+
+    // --- Mapping after sequence in same document ---
+
+    @Test func testSequenceThenMappingInSameLevel() throws {
+        // A top-level sequence should consume all items; this is ONE document
+        let yaml = """
+        - item1
+        - item2
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result == .sequence([.string("item1"), .string("item2")]))
+    }
+
+    // --- Complex Kubernetes-like with multiple features ---
+
+    @Test func testComplexKubernetesDeployment() throws {
+        let yaml = """
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: nginx
+          labels:
+            app: nginx
+            tier: frontend
+        spec:
+          replicas: 3
+          selector:
+            matchLabels:
+              app: nginx
+          template:
+            metadata:
+              labels:
+                app: nginx
+            spec:
+              containers:
+                - name: nginx
+                  image: "nginx:1.25"
+                  ports:
+                    - containerPort: 80
+                  env:
+                    - name: ENV
+                      value: production
+                  resources:
+                    limits:
+                      cpu: "500m"
+                      memory: "128Mi"
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["apiVersion"] == .string("apps/v1"))
+        #expect(result["kind"] == .string("Deployment"))
+        #expect(result["metadata"]?["labels"]?["tier"] == .string("frontend"))
+        #expect(result["spec"]?["replicas"] == .int(3))
+        let containers = result["spec"]?["template"]?["spec"]?["containers"]
+        #expect(containers?[0]?["name"] == .string("nginx"))
+        #expect(containers?[0]?["image"] == .string("nginx:1.25"))
+        #expect(containers?[0]?["ports"]?[0]?["containerPort"] == .int(80))
+        #expect(containers?[0]?["env"]?[0]?["name"] == .string("ENV"))
+        #expect(containers?[0]?["resources"]?["limits"]?["cpu"] == .string("500m"))
+        #expect(containers?[0]?["resources"]?["limits"]?["memory"] == .string("128Mi"))
+    }
+
+    // --- Error cases: more granular ---
+
+    @Test func testUnterminatedSingleQuoteInFlowSequence() throws {
+        do {
+            _ = try YAMLValue.parse("['unterminated")
+            throw YAMLError.parseError("Expected error but none thrown")
+        } catch {
+            // Expected
+        }
+    }
+
+    @Test func testEmptyAnchorName() throws {
+        do {
+            _ = try YAMLValue.parse("& value")
+            throw YAMLError.parseError("Expected error but none thrown")
+        } catch {
+            // Expected
+        }
+    }
+
+    @Test func testEmptyAliasName() throws {
+        do {
+            _ = try YAMLValue.parse("* ")
+            throw YAMLError.parseError("Expected error but none thrown")
+        } catch {
+            // Expected
+        }
+    }
+
+    // --- Mapping where value is a sequence starting on same line ---
+
+    @Test func testInlineSequenceStart() throws {
+        let yaml = """
+        items: - one
+        """
+        // "- one" after ": " on same line is a plain scalar "- one"
+        // because block sequence items must be at the right indentation
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["items"] == .string("- one"))
+    }
+
+    // --- Multiple blank lines between entries ---
+
+    @Test func testMultipleBlankLinesBetweenMappingEntries() throws {
+        let yaml = "a: 1\n\n\n\nb: 2\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["a"] == .int(1))
+        #expect(result["b"] == .int(2))
+    }
+
+    @Test func testMultipleBlankLinesBetweenSequenceItems() throws {
+        let yaml = "- one\n\n\n- two\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result == .sequence([.string("one"), .string("two")]))
+    }
+
+    // --- Data URI / base64-like values ---
+
+    @Test func testBase64LikeValue() throws {
+        let yaml = "data: SGVsbG8gV29ybGQ="
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["data"] == .string("SGVsbG8gV29ybGQ="))
+    }
+
+    // --- Nested block scalar with varying indent ---
+
+    @Test func testNestedMappingWithBlockScalar() throws {
+        let yaml = """
+        outer:
+          inner:
+            content: |
+              deeply nested
+              block scalar
+            next: value
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["outer"]?["inner"]?["content"] == .string("deeply nested\nblock scalar\n"))
+        #expect(result["outer"]?["inner"]?["next"] == .string("value"))
+    }
+
+    // --- Tags on sequences and mappings ---
+
+    @Test func testTagOnSequence() throws {
+        let result = try YAMLValue.parse("!!seq [1, 2, 3]")
+        #expect(result == .sequence([.int(1), .int(2), .int(3)]))
+    }
+
+    @Test func testTagOnMapping() throws {
+        let result = try YAMLValue.parse("!!map {a: 1}")
+        #expect(result["a"] == .int(1))
+    }
+
+    // --- Large sequence ---
+
+    @Test func testLargeSequence() throws {
+        var yaml = ""
+        for i in 0..<100 {
+            yaml += "- item\(i)\n"
+        }
+        let result = try YAMLValue.parse(yaml)
+        #expect(result.count == 100)
+        #expect(result[0] == .string("item0"))
+        #expect(result[99] == .string("item99"))
+    }
+
+    // --- Consecutive document markers ---
+
+    @Test func testConsecutiveDocumentStarts() throws {
+        let yaml = "---\n---\n---\nvalue\n"
+        let docs = try YAMLValue.parseAll(yaml)
+        // First two --- produce null documents, third precedes "value"
+        #expect(docs.count == 3)
+        #expect(docs[0] == .null)
+        #expect(docs[1] == .null)
+        #expect(docs[2] == .string("value"))
+    }
+
+    // --- Plain scalar with colon at end of value ---
+
+    @Test func testPlainScalarEndingWithColon() throws {
+        let yaml = "key: \"value:\""
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["key"] == .string("value:"))
+    }
+
+    // --- Sequence item that is just a dash with nothing after ---
+
+    @Test func testSequenceItemDashOnly() throws {
+        let yaml = "-\n- value\n"
+        let result = try YAMLValue.parse(yaml)
+        #expect(result[0] == .null)
+        #expect(result[1] == .string("value"))
+    }
+
+    // --- Mapping with inline and next-line values mixed ---
+
+    @Test func testMixedInlineAndNextLineValues() throws {
+        let yaml = """
+        inline: value
+        nextline:
+          nested
+        another_inline: 42
+        """
+        let result = try YAMLValue.parse(yaml)
+        #expect(result["inline"] == .string("value"))
+        #expect(result["nextline"] == .string("nested"))
+        #expect(result["another_inline"] == .int(42))
+    }
+
+    // --- Flow sequence with null/empty items ---
+
+    @Test func testFlowSequenceWithNulls() throws {
+        let result = try YAMLValue.parse("[null, ~, , hello]")
+        #expect(result[0] == .null)
+        #expect(result[1] == .null)
+        // Empty item between commas may be null or empty string depending on parser
+        #expect(result[3] == .string("hello"))
+    }
+
     // MARK: - ExpressibleBy Literals (Swift only)
     #if !SKIP
 

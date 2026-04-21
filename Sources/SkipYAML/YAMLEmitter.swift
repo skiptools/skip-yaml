@@ -197,8 +197,10 @@ public final class YAMLEmitter {
 
     private func canBeSingleQuoted(_ value: String) -> Bool {
         for ch in value {
-            // Control characters (except newline which gets folded)
-            if ch < "\u{0020}" && ch != "\n" {
+            // Control characters cannot be represented in single-quoted style.
+            // Newlines get folded to spaces in single-quoted strings, which
+            // changes the value, so they must use double-quoting too.
+            if ch < "\u{0020}" {
                 return false
             }
         }
