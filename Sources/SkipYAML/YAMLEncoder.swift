@@ -1,5 +1,4 @@
 // Copyright 2024-2026 Skip
-// SPDX-License-Identifier: MPL-2.0
 
 // Codable support requires Swift Foundation protocols that don't transpile to Kotlin.
 // The core YAMLValue parser/emitter works on both platforms.
